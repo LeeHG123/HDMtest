@@ -1,0 +1,57 @@
+data:
+    modality: "1D"
+    dataset: "Quadratic"
+    #dataset: "Gaussian"
+    num_data: 1000
+    dimension: 100
+    grid_type: "uniform" # x 좌표 생성 방식: "uniform" (균등) 또는 "random" (랜덤 샘플링) 
+    num_basis: 9 # 사용할 기저 함수의 수. null이면 전체 사용 (예: 50)   
+    hyp_len: 0.8 #Quadratic : 0.8
+    hyp_gain: 1.0
+    num_workers: 4
+
+model:
+    model_type: "FNO"
+    n_modes: [9,]
+    hidden_channels: 256
+    in_channels: 2
+    out_channels: 1
+    lifting_channels: 256
+    projection_channels: 256
+    n_layers: 4
+    norm: 'group_norm'
+    preactivation: True
+    skip: 'soft-gating'
+    separable: True
+    factorization: null
+    rank: 1
+    joint_factorization: False
+    fixed_rank_modes: False
+    implementation: 'factorized'
+    ckpt_dir: "./exp/logs/quadratic_experiment/ckpt_step_20000.pth"
+    # --- AFNO 고유 하이퍼파라미터 추가 ---
+    num_blocks: 8
+    sparsity_threshold: 0.01
+    hidden_size_factor: 2   
+    hard_thresholding_fraction: 1.0
+
+diffusion:
+    beta_schedule: "cosine"
+    num_diffusion_timesteps: 1000
+
+training:
+    batch_size: 100
+    n_epochs: 2000
+    ckpt_store: 100
+    val_freq: 100  # Validation frequency (every N steps)
+    val_batch_size: 50 
+    lambda_norm: 0.1 # normalize weight
+
+sampling:
+    batch_size: 1000
+    clamp_threshold: 1000
+
+optim:
+    lr: 0.00001
+    grad_clip: 1.0
+
