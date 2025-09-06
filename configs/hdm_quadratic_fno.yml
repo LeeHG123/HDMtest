@@ -1,0 +1,96 @@
+data:
+    modality: "1D"
+    #dataset: "Quadratic"
+    #dataset: "Gaussian"
+    dataset: "Doppler"
+    num_data: 1000
+    dimension: 100
+    grid_type: "random" # x 좌표 생성 방식: "uniform" (균등) / "random" (랜덤 샘플링) / "adapted" (적응형)
+    subgroups: 3           # ← 추가: 정의역 분할 수 
+    adapt:                 # ← 추가: 적응형 하이퍼(선택)
+        pilot_points: 2048     # 파이럿 샘플 수(활동도 산정용)
+        alpha: 1.0             # 가중치 지수(>1이면 고주파 더 강조)
+        smooth_sigma: 5.0      # Gaussian 평활(파이럿 좌표 단위)
+        clip_quantile: 0.95    # 활동도 상한 분위수
+        min_per_group: 40       # 각 subgroup 최소 점수    
+    num_basis: 64 # 사용할 기저 함수의 수. null이면 전체 사용 (예: 50)   
+    hyp_len: 0.05 #Quadratic: 0.8 #Doppler: 0.05
+    hyp_gain: 1.0
+    num_workers: 4
+
+model:
+    model_type: "NUFNO"
+    n_modes: [100,]
+    hidden_channels: 256
+    in_channels: 2
+    out_channels: 1
+    lifting_channels: 256
+    projection_channels: 256
+    n_layers: 4
+    norm: 'group_norm'
+    preactivation: True
+    skip: 'soft-gating'
+    separable: True
+    factorization: null
+    rank: 1
+    joint_factorization: False
+    fixed_rank_modes: False
+    implementation: 'factorized'
+    kappa_lf_lambda: 0.0        # 저주파 보존(Charbonnier) 정규화 세기
+    kappa_aliasing_lambda: 0.0  # 에일리어싱 soft barrier 세기
+    enable_band_gating: true
+    band_split_fracs: [0.4, 0.8]
+    enable_time_freq_gate: true
+    time_gate_tau0_frac: 0.3
+    time_gate_alpha_init: 4.0
+    time_gate_hidden: 256    
+    enable_gabor_window: true
+    gabor_omega_init: 25.0   # 창 폭 초기값 (정규화 좌표 스케일)    
+    # ----- freq scale options -----
+    #learnable_freq_scale: true
+    #per_layer_freq_scale: true
+    #freq_scale_min: 0.05
+    #freq_scale_max: 3.5 #Quadratic : 1.0 Doppler : 3.5
+    freq_scale_init: 0.3    
+    ckpt_dir: "./exp/logs/quadratic_experiment/ckpt_step_20000.pth"
+    # --- AFNO 고유 하이퍼파라미터 추가 ---
+    num_blocks: 8
+    sparsity_threshold: 0.01
+    hidden_size_factor: 2   
+    hard_thresholding_fraction: 1.0
+
+diffusion:
+    beta_schedule: "cosine"
+    num_diffusion_timesteps: 1000
+
+noise_kernel:
+    type: "se" #"se" "sm" "wsm"
+    Q: 8
+    init: { method: "handcrafted" }
+    sm_init:
+        mu_frac:    [0.025, 0.050, 0.085, 0.130, 0.200, 0.340, 0.530, 0.940]
+        sigma_frac: [0.020, 0.028, 0.036, 0.045, 0.055, 0.065, 0.075, 0.090]
+        w:          [0.17,  0.18,  0.17,  0.16,  0.13,  0.09,  0.06,  0.04]
+    share_sigma: false
+    gain: 1.0     # Σ w_q = 1 로 정규화, 전체 스케일은 gain으로 제어    
+
+training:
+    batch_size: 100
+    n_epochs: 2000
+    ckpt_store: 100
+    val_freq: 50  # Validation frequency (every N steps)
+    val_batch_size: 50 
+    lambda_norm: 0.0 # normalize weight
+    spec_lambda: 2      # 스펙트럼 잔차 손실 계수
+
+sampling:
+    batch_size: 100
+    clamp_threshold: 1000
+    enable_rms_clip: true  # resolution-free RMS clipping 활성화 여부
+    rms_clip_threshold: 1.1    #doppler: 1.1
+
+optim:
+    lr: 0.00001
+    grad_clip: 1.0
+    kappa_lr_multiplier: 20.0   # κ만 더 과감하게 학습
+
