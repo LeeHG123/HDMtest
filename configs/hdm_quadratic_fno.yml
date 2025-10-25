@@ -1,0 +1,134 @@
+data:
+    modality: "1D"
+    dataset: "Doppler" # "Linear" "Quadratic" "Circle" "Sin" "Sinc" "Doppler" "Block" "Gaussian" "RQ" "Matern12" "Matern32" "Matern52" 
+    num_data: 1000
+    dimension: 100
+    noise_std: 0.0
+    grid_type: "uniform" # x 좌표 생성 방식: "uniform" (균등) / "random" (랜덤 샘플링) 
+    num_basis: 100 # 사용할 기저 함수의 수. null이면 전체 사용 (예: 50)   
+    hyp_len: 0.04 
+    hyp_gain: 1.0
+    num_workers: 4
+
+model:
+    model_type: "KERNEL" #"NUFNO" "KERNEL"
+    kernel_mode: "kno"          # "nufft" 그대로면 원래 경로
+    kernel_type: "nsgsm"          # "rbf" | "gsm" | "nsgsm"
+    kernel_Q: 6
+    kernel_hidden: 64
+    enable_kernel_time_cond: true
+    kernel_time_hidden: 64
+    # ---- KERNEL backend (입력 KRR + 출력 보간 + 옵션: 시간 커널, Nyström) ----
+    kernel:
+        # 커널 종류
+        in_kernel: "rq"         # {"rbf","rq","m52", "linear"}  — 입력측 KRR의 공간 커널 S
+        out_kernel: "m52"       # {"rbf","rq","m52"}  — 출력 보간 χ의 커널 k_out
+        time_kernel: "rbf"      # {"rbf","rq","m52"}  — product-in-time 사용 시 시간 커널
+
+        # 해 해결기/근사
+        solver: "exact"         # {"exact","nystrom"}
+        nystrom_m: 128          # solver="nystrom"일 때 앵커 개수 힌트(미설정 시 배치에서 자동 샘플)
+
+        # 시간 커널 결합
+        use_time: true
+        use_product_time: true
+
+        # 초기 하이퍼파라미터(옵션: 미설정 시 내부 기본 사용)
+        in_init:
+            lengthscale: 30.0      # 스칼라 또는 리스트([d_in]) — S의 ℓ
+            variance: 1.0         # S의 σ^2
+            lambda: 1.0e-2        # (K + λI) 중 λ
+        time_init:
+            lengthscale: 0.1      # k_t의 ℓ
+            variance: 1.0         # k_t의 σ^2
+        out_init:
+            lengthscale: 0.1      # 스칼라 또는 리스트([d_out]) — k_out의 ℓ
+            variance: 1.0         # k_out의 σ^2
+            rho: 1.0e-2           # (K_out + ρI) 중 ρ
+
+        # 입력 측정 최적복원 ψ̃(메시 불변) 설정
+        inlift:
+            enable: false
+            kernel: "m52"         # ψ̃에 쓸 커널
+            lengthscale: 0.12
+            variance: 1.0
+            rho: 1.0e-3
+
+        # 로그 주변우도 MLE(하이퍼 추정) 제어
+        mle:
+            input:
+                enable: true
+                max_iter: 1500
+                lr: 0.001
+                optimize_alpha: true     # in_kernel이 "rq"일 때 α도 학습
+                optimize_time: true      # product-in-time이면 시간 커널 하이퍼도 학습
+            output:
+                enable: true
+                max_iter: 400
+                lr: 0.001
+                optimize_alpha: false    # out_kernel이 "rq"일 때만 의미 있음
+
+        # 사전(U,V) 구성/로드
+        dict:
+            size: 8192
+            batch: 256
+            path: "./exp/logs/quadratic_experiment/kernel_dict.pt"  # 없으면 자동 생성 후 저장
+    # ------------------------------------       
+    n_modes: [100,]
+    hidden_channels: 256
+    in_channels: 2
+    out_channels: 1
+    lifting_channels: 256
+    projection_channels: 256
+    n_layers: 4
+    norm: 'group_norm'
+    preactivation: True
+    skip: 'soft-gating'
+    separable: True
+    factorization: null
+    rank: 1
+    joint_factorization: False
+    fixed_rank_modes: False
+    implementation: 'factorized'
+    kappa_lf_lambda: 0.0        # 저주파 보존(Charbonnier) 정규화 세기
+    kappa_aliasing_lambda: 0.0  # 에일리어싱 soft barrier 세기
+    enable_band_gating: false
+    band_split_fracs: [0.4, 0.8]
+    enable_time_freq_gate: false
+    time_gate_tau0_frac: 0.3
+    time_gate_alpha_init: 4.0
+    time_gate_hidden: 256    
+    enable_gabor_window: false
+    gabor_omega_init: 25.0   # 창 폭 초기값 (정규화 좌표 스케일)    
+    # ----- freq scale options -----
+    #learnable_freq_scale: true
+    #per_layer_freq_scale: true
+    #freq_scale_min: 0.05
+    #freq_scale_max: 3.5 #Quadratic : 1.0 Doppler : 3.5
+    freq_scale_init: 1.0    
+    ckpt_dir: "./exp/logs/quadratic_experiment/ckpt_step_20000.pth"
+
+diffusion:
+    beta_schedule: "cosine"
+    num_diffusion_timesteps: 1000
+
+training:
+    batch_size: 100
+    n_epochs: 2000
+    ckpt_store: 100
+    val_freq: 50  # Validation frequency (every N steps)
+    val_batch_size: 50 
+    lambda_norm: 0.0 # normalize weight
+    spec_lambda: 0.0      # 스펙트럼 잔차 손실 계수
+
+sampling:
+    batch_size: 100
+    clamp_threshold: 1000
+    enable_rms_clip: true  # resolution-free RMS clipping 활성화 여부
+    rms_clip_threshold: 1.1    #doppler: 1.1
+
+optim:
+    lr: 0.00001
+    grad_clip: 1.0
+    kappa_lr_multiplier: 0.0   # κ만 더 학습
+
