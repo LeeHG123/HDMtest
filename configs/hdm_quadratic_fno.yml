@@ -1,0 +1,93 @@
+data:
+    modality: "1D"
+    dataset: "Sinc" # "Linear" "Quadratic" "Circle" "Sin" "Sinc" "Doppler" "Block" "Gaussian" "RQ" "Matern12" "Matern32" "Matern52" 
+    num_data: 1000
+    dimension: 100
+    noise_std: 0.0
+    grid_type: "random" # x 좌표 생성 방식: "uniform" (균등) / "random" (랜덤 샘플링) 
+    num_basis: 100 # 사용할 기저 함수의 수. null이면 전체 사용 (예: 50)   
+    hyp_len: 0.20 
+    hyp_gain: 1.0
+    num_workers: 4
+
+model:
+    model_type: "MHLKNO_LINATTN" #"NUFNO" "KNO" "MHLKNO" "MHLKNO_LINATTN"
+    # Unified RF 설정
+    rf_backend: "hybrid"       # "rff" | "chebyshev" | "hybrid"
+    rf_total_basis: 100        # baseline RFF-only와 동일한 feature budget
+    rf_rff_frac: 0.8           # 80% RFF, 40% Chebyshev 쪽에 할당
+
+    # Chebyshev-only 모드에서 사용할 기본 Taylor degree (hybrid에서는 budget으로 재계산됨)
+    taylor_degree: 12
+
+    kernel_type: "gsm"          # "rbf" | "gsm" | "nsgsm"
+    kernel_Q: 6
+    kernel_hidden: 64
+    enable_kernel_time_cond: true
+    kernel_time_hidden: 64
+    enable_spatial_kernel: false
+    spatial_kernel_hidden: 64    
+    enable_weighted_normalization: true
+    use_symmetric_trapz_sqrt: true
+    spec_rho_mu: 0.25
+    # MHL-KNO Specific Parameters
+    num_kernel_heads: 4        # 커널의 개수 (많을수록 표현력 증가)
+    num_kernel_basis: 100        # 각 커널당 주파수 샘플 수 (RFF 근사 정밀도)
+    kernel_rff_type: "rff"       # "rff" (Standard), "qmc" (Sobol), "ghq" (Gauss-Hermite)
+    kernel_bandwidth_init: 1.0  # 초기 주파수 분산 (RBF의 length scale과 반비례    
+    n_modes: [100,]
+    hidden_channels: 256
+    in_channels: 2
+    out_channels: 1
+    lifting_channels: 256
+    projection_channels: 256
+    n_layers: 4
+    norm: 'group_norm'
+    preactivation: True
+    skip: 'soft-gating'
+    separable: True
+    factorization: null
+    rank: 1
+    joint_factorization: False
+    fixed_rank_modes: False
+    implementation: 'factorized'
+    kappa_lf_lambda: 0.0        # 저주파 보존(Charbonnier) 정규화 세기
+    kappa_aliasing_lambda: 0.0  # 에일리어싱 soft barrier 세기
+    enable_band_gating: false
+    band_split_fracs: [0.4, 0.8]
+    enable_time_freq_gate: false
+    time_gate_tau0_frac: 0.3
+    time_gate_alpha_init: 4.0
+    time_gate_hidden: 256    
+    enable_gabor_window: false
+    gabor_omega_init: 25.0   # 창 폭 초기값 (정규화 좌표 스케일)    
+    # ----- freq scale options -----
+    #learnable_freq_scale: true
+    #per_layer_freq_scale: true
+    #freq_scale_min: 0.05
+    #freq_scale_max: 3.5 #Quadratic : 1.0 Doppler : 3.5
+    freq_scale_init: 1.0    
+    ckpt_dir: "./exp/logs/quadratic_experiment/ckpt_step_20000.pth"
+
+diffusion:
+    beta_schedule: "cosine"
+    num_diffusion_timesteps: 1000
+
+training:
+    batch_size: 100
+    n_epochs: 2000
+    ckpt_store: 100
+    val_freq: 50  # Validation frequency (every N steps)
+    val_batch_size: 50 
+
+sampling:
+    batch_size: 100
+    clamp_threshold: 1000
+    enable_rms_clip: true  # resolution-free RMS clipping 활성화 여부
+    rms_clip_threshold: 1.50    #doppler: 1.1
+
+optim:
+    lr: 0.00001
+    grad_clip: 1.0
+    kappa_lr_multiplier: 10.0   # κ만 더 학습
+
