@@ -10,7 +10,7 @@ class QuadraticDataset(torch.utils.data.Dataset):
     } 에 따라 1D 함수 데이터를 생성합니다.
 
       - quadratic: y = a * x^2 + ε,  a∈{-1,+1}
-      - linear   : y = a * x   + ε,  a∈{-1,+1}
+      - linear   : y = a * x   + ε,  a∈{-2,-1/2,-1,1/2,1,2}
       - circle   : y = a * sqrt(r^2 - x^2) + ε,  a∈{-1,+1},  r∈{10,5} (정의역 [-10,10])
       - sin      : y = sin(x) + ε
       - sinc     : y = sinc(x) + ε, sinc(x)=sin(πx)/(πx)  (정의역 [-10,10])
@@ -49,16 +49,16 @@ class QuadraticDataset(torch.utils.data.Dataset):
                 f"got {func_type}"
             )
         self.func_type  = func_type
-
-        self.num_data   = num_data
-        self.num_points = num_points
-        self.seed       = seed
-        self.grid_type  = grid_type
-        self.is_train   = True
+        self.num_data   = int(num_data)
+        self.num_points = int(num_points)
+        self.grid_type  = str(grid_type).lower()
         self.noise_std  = float(noise_std)
 
-        # 좌표/정의역 설정 (러너의 _coord_norm 과 일치)
-        if self.func_type in ('doppler',):
+        if self.grid_type not in ('uniform', 'random'):
+            raise ValueError("grid_type must be 'uniform' or 'random'")
+
+        # doppler만 [0,1], 나머지는 [-10,10]
+        if self.func_type == 'doppler':
             # [0,1] → [-1,1]
             self.coord_scale  = 0.5
             self.coord_offset = 0.5
@@ -73,130 +73,142 @@ class QuadraticDataset(torch.utils.data.Dataset):
         self.radius = 10.0
         self.circle_radii = torch.tensor([10.0, 5.0])
 
+        # Linear 기울기 후보
+        #  a ∈ {-2, -1/2, -1, 1/2, 1, 2}
+        self.linear_coeffs = torch.tensor([-2.0, -0.5, -1.0, 0.5, 1.0, 2.0])
+
         # ─────────────────────────────────────────────────────────
         # (0) 단일 샘플 파라미터 고정 (gaussian_bumps / am_sin)
         #     전역 RNG를 가능한 덜 건드리기 위해 별도 Generator 사용
         # ─────────────────────────────────────────────────────────
-        if self.func_type == 'gaussian_bumps':
-            g = torch.Generator(device='cpu').manual_seed(self.seed + 1701)
-            self.gb_num_bumps = 24
+        g = torch.Generator()
+        g.manual_seed(seed + 12345)
 
-            # 고주파 성분 완화(요청 반영): σ 를 전역 스케일링하여 bump 폭을 확장
-            #   - 원래 σ: log-uniform in [0.10, 0.60]
-            #   - 적용 σ: σ_scaled = gb_sigma_scale * σ
-            self.gb_sigma_scale = 3.0
+        # gaussian_bumps 파라미터(단일 샘플)
+        K = 24
+        centers = torch.linspace(-8.0, 8.0, K)  # 고정 center
+        # amplitude/width는 seed로 고정
+        amps = 0.75 + 0.5 * torch.rand(K, generator=g)
+        sigmas = 0.35 + 0.15 * torch.rand(K, generator=g)
+        self.gb_centers = centers
+        self.gb_amps    = amps
+        self.gb_sigmas  = sigmas
 
-            span = (self._xmax - 0.7) - (self._xmin + 0.7)
-            self.gb_centers = (self._xmin + 0.7) + torch.rand(self.gb_num_bumps, generator=g) * span
-            self.gb_amps = torch.randn(self.gb_num_bumps, generator=g)
+        # am_sin 파라미터(단일 샘플)
+        self.am_carrier_w = 2.3
+        self.am_mod_w     = 0.55
+        self.am_mod_w2    = 0.18
+        self.am_mod_depth  = 0.95
+        self.am_mod_depth2 = 0.65
+        self.am_phase = 2.0 * math.pi * torch.rand((), generator=g).item()
 
-            # sigmas (pre-scale): log-uniform in [0.10, 0.60]
-            sigma_min, sigma_max = 0.10, 0.60
-            u = torch.rand(self.gb_num_bumps, generator=g)
-            log_min = math.log10(sigma_min)
-            log_max = math.log10(sigma_max)
-            self.gb_sigmas = torch.pow(10.0, log_min + (log_max - log_min) * u) * self.gb_sigma_scale
-
-        if self.func_type == 'am_sin':
-            g = torch.Generator(device='cpu').manual_seed(self.seed + 2909)
-            self.am_carrier_w = 2.3
-            # 더 다양한 진폭 변조(envelope)를 위해 저주파 성분을 하나 더 추가.
-            # carrier 주파수(= am_carrier_w)는 그대로 유지한다.
-            self.am_mod_w = 0.55      # ω_{m1}
-            self.am_mod_w2 = 0.18     # ω_{m2} (더 저주파)
-            self.am_mod_depth = 0.95  # d_1
-            self.am_mod_depth2 = 0.65 # d_2
-            self.am_phase = float(2.0 * math.pi * torch.rand((), generator=g))
-
-        # 1) 좌표 그리드 생성
-        if grid_type == 'uniform':
-            x_base = torch.linspace(start=self._xmin, end=self._xmax, steps=self.num_points)
-        elif grid_type == 'random':
-            x_base = (torch.rand(self.num_points) * (self._xmax - self._xmin) + self._xmin).sort().values
+        # ─────────────────────────────────────────────────────────
+        # (1) x 생성
+        # ─────────────────────────────────────────────────────────
+        if self.grid_type == 'uniform':
+            x_1d = torch.linspace(self._xmin, self._xmax, self.num_points)
+            self.x = x_1d.unsqueeze(0).repeat(self.num_data, 1)  # (B,N)
         else:
-            raise ValueError(f"Unknown grid_type: '{grid_type}'. Choose 'uniform' or 'random'")
+            # random grid: 각 샘플마다 다른 x를 저장하지 않고 __getitem__에서 생성
+            # placeholder
+            self.x = None
 
-        self.x = x_base.unsqueeze(0).repeat(self.num_data, 1)  # (B, N)
+        # ─────────────────────────────────────────────────────────
+        # (2) y 생성 (uniform grid에서만 사전 생성)
+        # ─────────────────────────────────────────────────────────
+        if self.grid_type == 'uniform':
+            if self.func_type == 'doppler':
+                # doppler는 "함수별 상수 오프셋" b만 추가
+                b = torch.randn(self.num_data, 1) * self.noise_std
+                b = b.repeat(1, self.num_points)
 
-        # 2) 데이터 생성 (ε 또는 b: 함수별 상수 잡음)
-        torch.manual_seed(self.seed)
+                xx = self.x.clamp(0.0, 1.0)
+                amp   = torch.sqrt((xx * (1.0 - xx)).clamp_min(0.0))
+                phase = (2.0 * math.pi * 1.05) / (xx + 0.05)
+                y = amp * torch.sin(phase) + b
 
-        if self.func_type == 'doppler':
-            # b: (B,1) → (B,N)
-            b = torch.randn(self.num_data, 1) * self.noise_std
-            b = b.repeat(1, self.num_points)
+            else:
+                # 공통: 함수별 상수 잡음 ε
+                eps = torch.randn(self.num_data, 1) * self.noise_std
+                eps = eps.repeat(1, self.num_points)
 
-            xx = self.x.clamp(0.0, 1.0)
-            amp   = torch.sqrt((xx * (1.0 - xx)).clamp_min(0.0))
-            phase = (2.0 * math.pi * 1.05) / (xx + 0.05)
-            y = amp * torch.sin(phase) + b
+                if self.func_type == 'quadratic':
+                    a = (torch.randint(low=0, high=2, size=(self.num_data, 1)) * 2 - 1).repeat(1, self.num_points)
+                    y = a * (self.x ** 2) + eps
+
+                elif self.func_type == 'linear':
+                    a_choices = self.linear_coeffs
+                    a_idx = torch.randint(low=0, high=a_choices.numel(), size=(self.num_data, 1))
+                    a = a_choices[a_idx].repeat(1, self.num_points)
+                    y = a * (self.x) + eps
+
+                elif self.func_type == 'sin':
+                    y = torch.sin(self.x) + eps
+
+                elif self.func_type == 'sinc':
+                    y = torch.sinc(self.x) + eps
+
+                elif self.func_type == 'gaussian_bumps':
+                    # 단일 샘플 base function을 (1,N)에서 만들고 (B,N)로 반복
+                    x0 = self.x[0:1, :]  # (1,N)
+                    centers = self.gb_centers.view(1, 1, -1)  # (1,1,K)
+                    amps    = self.gb_amps.view(1, 1, -1)
+                    sigmas  = self.gb_sigmas.view(1, 1, -1)
+
+                    diff = (x0.unsqueeze(-1) - centers) / sigmas          # (1,N,K)
+                    y0   = (amps * torch.exp(-0.5 * diff.pow(2))).sum(-1) # (1,N)
+                    y = y0.repeat(self.num_data, 1) + eps
+
+                elif self.func_type == 'am_sin':
+                    x0 = self.x
+                    envelope = (
+                        1.0 + self.am_mod_depth * torch.cos(self.am_mod_w * x0 + 0.3)
+                    ) * (
+                        1.0 + self.am_mod_depth2 * torch.cos(self.am_mod_w2 * x0 - 1.1)
+                    )
+                    y0 = envelope * torch.sin(self.am_carrier_w * x0 + self.am_phase)
+                    taper = torch.exp(-0.5 * (x0 / 8.0).pow(2)) * 0.45 + 0.55
+                    y = y0 * taper + eps
+
+                else:
+                    # circle
+                    a = (torch.randint(low=0, high=2, size=(self.num_data, 1)) * 2 - 1).repeat(1, self.num_points)
+                    r_choices = self.circle_radii
+                    r_idx = torch.randint(low=0, high=r_choices.numel(), size=(self.num_data, 1))
+                    r = r_choices[r_idx].repeat(1, self.num_points)
+                    y = a * torch.sqrt((r ** 2 - self.x ** 2).clamp_min(0.0)) + eps
+
+            self.dataset = y  # (B,N)
+
+            # Z-normalize (전 데이터 mean/std)
+            self.mean = self.dataset.mean()
+            self.std  = self.dataset.std().clamp_min(1e-8)
+            self.dataset = (self.dataset - self.mean) / self.std
 
         else:
-            # 공통: 함수별 상수 잡음 ε
-            eps = torch.randn(self.num_data, 1) * self.noise_std
-            eps = eps.repeat(1, self.num_points)
-
-            if self.func_type == 'quadratic':
-                a = (torch.randint(low=0, high=2, size=(self.num_data, 1)) * 2 - 1).repeat(1, self.num_points)
-                y = a * (self.x ** 2) + eps
-
-            elif self.func_type == 'linear':
-                a = (torch.randint(low=0, high=2, size=(self.num_data, 1)) * 2 - 1).repeat(1, self.num_points)
-                y = a * (self.x) + eps
-
-            elif self.func_type == 'sin':
-                y = torch.sin(self.x) + eps
-
-            elif self.func_type == 'sinc':
-                y = torch.sinc(self.x) + eps
-
-            elif self.func_type == 'gaussian_bumps':
-                # 단일 샘플 base function을 (1,N)에서 만들고 (B,N)로 반복
-                x0 = self.x[0:1, :]  # (1,N)
-                centers = self.gb_centers.view(1, 1, -1)  # (1,1,K)
-                amps    = self.gb_amps.view(1, 1, -1)     # (1,1,K)
-                sigmas  = self.gb_sigmas.view(1, 1, -1)   # (1,1,K)
-
-                diff = (x0.unsqueeze(-1) - centers) / sigmas     # (1,N,K)
-                y0   = (amps * torch.exp(-0.5 * diff.pow(2))).sum(dim=-1)  # (1,N)
-                y    = y0.repeat(self.num_data, 1) + eps
-
-            elif self.func_type == 'am_sin':
-                x0 = self.x[0:1, :]  # (1,N)
-                envelope = (
-                    1.0 + self.am_mod_depth * torch.cos(self.am_mod_w * x0 + 0.3)
-                ) * (
-                    1.0 + self.am_mod_depth2 * torch.cos(self.am_mod_w2 * x0 - 1.1)
-                )
-                y0 = envelope * torch.sin(self.am_carrier_w * x0 + self.am_phase)
-                taper = torch.exp(-0.5 * (x0 / 8.0).pow(2)) * 0.45 + 0.55
-                y0 = y0 * taper
-                y = y0.repeat(self.num_data, 1) + eps
-
-            else:  # 'circle'
-                a = (torch.randint(low=0, high=2, size=(self.num_data, 1)) * 2 - 1).repeat(1, self.num_points)
-                r_choices = self.circle_radii.to(self.x.device)
-                r_idx = torch.randint(low=0, high=r_choices.numel(), size=(self.num_data, 1), device=self.x.device)
-                r = r_choices[r_idx]  # (B,1)
-                y = a * torch.sqrt((r.pow(2) - self.x.pow(2)).clamp_min(0.0)) + eps
-
-        # 3) Z-정규화 통계 및 저장
-        self.mean = y.mean()
-        self.std  = y.std().clamp_min(1e-8)
-        self.dataset = (y - self.mean) / self.std
+            # random grid에서는 dataset을 미리 만들지 않음
+            self.dataset = None
+            # mean/std는 대략 0/1로 두되, inverse_transform은 호출되지 않는다고 가정
+            self.mean = torch.tensor(0.0)
+            self.std  = torch.tensor(1.0)
 
     def __len__(self):
         return self.num_data
 
     def __getitem__(self, idx: int):
-        """
-        grid_type=='random' & train: 매 호출마다 새 좌표/함수 샘플 (해상도-무관 학습)
-        """
-        if self.grid_type == 'random' and getattr(self, 'is_train', False):
-            x_item = (torch.rand(self.num_points) * (self._xmax - self._xmin) + self._xmin).sort().values
-
+        if self.grid_type == 'random':
+            # 샘플마다 랜덤 x 생성
             if self.func_type == 'doppler':
-                b = (torch.randn(1) * self.noise_std).repeat(self.num_points)
+                x_item = torch.rand(self.num_points)  # [0,1]
+            else:
+                x_item = (torch.rand(self.num_points) * 20.0) - 10.0  # [-10,10]
+            x_item, _ = torch.sort(x_item)
+
+            # y 생성
+            if self.func_type == 'doppler':
+                # doppler는 "함수별 상수 오프셋" b만 추가
+                b = torch.randn(1).repeat(self.num_points) * self.noise_std
+
                 xx = x_item.clamp(0.0, 1.0)
                 amp   = torch.sqrt((xx * (1.0 - xx)).clamp_min(0.0))
                 phase = (2.0 * math.pi * 1.05) / (xx + 0.05)
@@ -210,7 +222,9 @@ class QuadraticDataset(torch.utils.data.Dataset):
                     y_item = a * (x_item ** 2) + eps
 
                 elif self.func_type == 'linear':
-                    a = (torch.randint(low=0, high=2, size=(1,)) * 2 - 1).item()
+                    a_choices = self.linear_coeffs
+                    a_idx = torch.randint(low=0, high=a_choices.numel(), size=(1,))
+                    a = a_choices[a_idx].item()
                     y_item = a * (x_item) + eps
 
                 elif self.func_type == 'sin':
@@ -221,12 +235,11 @@ class QuadraticDataset(torch.utils.data.Dataset):
 
                 elif self.func_type == 'gaussian_bumps':
                     dev = x_item.device
-                    centers = self.gb_centers.to(dev)  # (K,)
-                    amps    = self.gb_amps.to(dev)     # (K,)
-                    sigmas  = self.gb_sigmas.to(dev)   # (K,)
-
-                    diff = (x_item.unsqueeze(-1) - centers.view(1, -1)) / sigmas.view(1, -1)  # (N,K)
-                    y0 = (amps.view(1, -1) * torch.exp(-0.5 * diff.pow(2))).sum(dim=-1)       # (N,)
+                    centers = self.gb_centers.to(dev).view(1, -1)  # (1,K)
+                    amps    = self.gb_amps.to(dev).view(1, -1)
+                    sigmas  = self.gb_sigmas.to(dev).view(1, -1)
+                    diff = (x_item.view(-1, 1) - centers) / sigmas  # (N,K)
+                    y0 = (amps * torch.exp(-0.5 * diff.pow(2))).sum(-1)  # (N,)
                     y_item = y0 + eps
 
                 elif self.func_type == 'am_sin':
@@ -237,16 +250,16 @@ class QuadraticDataset(torch.utils.data.Dataset):
                     )
                     y0 = envelope * torch.sin(self.am_carrier_w * x_item + self.am_phase)
                     taper = torch.exp(-0.5 * (x_item / 8.0).pow(2)) * 0.45 + 0.55
-                    y_item = (y0 * taper) + eps
+                    y_item = y0 * taper + eps
 
-                else:  # 'circle'
+                else:
+                    # circle
                     a = (torch.randint(low=0, high=2, size=(1,)) * 2 - 1).item()
-                    r_choices = self.circle_radii.to(x_item.device)
+                    r_choices = self.circle_radii
                     r = r_choices[torch.randint(low=0, high=r_choices.numel(), size=(1,))].item()
-                    r2 = r * r
-                    y_item = a * torch.sqrt((r2 - x_item.pow(2)).clamp_min(0.0)) + eps
+                    y_item = a * torch.sqrt((r ** 2 - x_item ** 2).clamp_min(0.0)) + eps
 
-            y_item = (y_item - self.mean) / self.std
+            # random grid는 정규화하지 않고 raw로 반환(러너에서 처리)
             return x_item.unsqueeze(-1), y_item.unsqueeze(-1)
 
         # 고정 그리드 샘플
@@ -292,7 +305,9 @@ class QuadraticDataset(torch.utils.data.Dataset):
             return y_raw
 
         if self.func_type == 'linear':
-            a   = (torch.randint(low=0, high=2, size=(B, 1), device=dev) * 2 - 1).repeat(1, N)
+            a_choices = self.linear_coeffs.to(dev)
+            a_idx = torch.randint(low=0, high=a_choices.numel(), size=(B, 1), device=dev)
+            a = a_choices[a_idx].repeat(1, N)
             y_raw = a * (x_batch) + eps
             return y_raw
 
