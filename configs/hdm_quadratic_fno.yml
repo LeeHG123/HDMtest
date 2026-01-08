@@ -1,0 +1,83 @@
+data:
+    modality: "1D"
+    dataset: "Sinc" # "Linear" "Quadratic" "Circle" "Sin" "Sinc" "Doppler" "GaussianBumps" "AMSin"
+    num_data: 1000
+    dimension: 100
+    noise_std: 0.0
+    grid_type: "random" # x 좌표 생성 방식: "uniform" (균등) / "random" (랜덤 샘플링)
+    num_basis: 100 # 사용할 기저 함수의 수. null이면 전체 사용 (예: 50)
+    hyp_len: 0.20 #"Quadratic","Circle" = 0.80 "Doppler" = 0.03 others = 0.20 
+    hyp_gain: 1.0
+    num_workers: 4
+
+model:
+    model_type: "MHLKNO_LINATTN"  # "FNO" "KNO" "MHLKNO" "ChebyshevMHLKNO" "MHLKNO_LINATTN"
+
+    # Unified RF 설정
+    rf_backend: "hybrid"       # "rff" | "chebyshev" | "hybrid"
+    rf_total_basis: 96        # baseline RFF-only와 동일한 feature budget 96고정
+    rf_rff_frac: 0.625           # hybrid에서 RFF 비율 (0~1) 0.5=deg8 0.625=deg6 0.75=deg4
+
+    # Chebyshev-only 모드에서 사용할 기본 Taylor degree (hybrid에서는 budget으로 재계산됨)
+    taylor_degree: 12
+
+    # Kernel 하이퍼
+    kernel_type: "gsm"         # "rbf" | "gsm" | "nsgsm"
+    kernel_Q: 6
+    kernel_hidden: 64
+    enable_kernel_time_cond: true
+    kernel_time_hidden: 64
+
+    # (MHLKNO 계열) 공간-의존 커널 옵션
+    enable_spatial_kernel: false
+    spatial_kernel_hidden: 64
+
+    # MHL-KNO Specific Parameters
+    num_kernel_heads: 4
+    num_kernel_basis: 100
+    kernel_rff_type: "rff"       # "rff" | "qmc" | "ghq"
+    kernel_bandwidth_init: 1.0
+
+    # Backbone 공통(FNO 스켈레톤 포함)
+    n_modes: [100,]
+    hidden_channels: 256
+    in_channels: 2
+    out_channels: 1
+    lifting_channels: 256
+    projection_channels: 256
+    n_layers: 4
+    norm: 'group_norm'
+    preactivation: True
+    skip: 'soft-gating'
+    separable: True
+    factorization: null
+    rank: 1
+    joint_factorization: False
+    fixed_rank_modes: False
+    implementation: 'factorized'
+
+    ckpt_dir: "./exp/logs/quadratic_experiment/ckpt_step_20000.pth"
+
+diffusion:
+    beta_schedule: "cosine"
+    num_diffusion_timesteps: 1000
+
+training:
+    batch_size: 100
+    n_epochs: 1500
+    ckpt_store: 100
+    val_freq: 50
+    val_batch_size: 50
+
+sampling:
+    batch_size: 100
+    clamp_threshold: 1000
+    enable_rms_clip: true
+    rms_clip_threshold: 1.50
+
+optim:
+    lr: 0.00001
+    grad_clip: 1.0
+    kappa_lr_multiplier: 10.0
+
+

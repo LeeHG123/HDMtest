@@ -1,0 +1,17 @@
+einops
+glob2
+matplotlib
+numpy
+pandas
+pathlib
+scipy
+statistics
+tensorboard
+tensorly
+tensorly-torch
+torch
+tqdm
+transformers
+torchsde
+torchode
+tb-nightly
