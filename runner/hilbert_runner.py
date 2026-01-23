@@ -882,24 +882,35 @@ class HilbertDiffusion(object):
             m_err, c_err = moments_metrics(free_input.cpu(), y_pow_plot, y_gt)
             print(f"[Tsit5] moments (raw): mean_L2 = {m_err:.6e}, cov_HS = {c_err:.6e}")
 
-            fig, ax = plt.subplots(1, 2, figsize=(10, 5))
+            # 저장 경로: sample 폴더를 사용 (없으면 생성)
+            os.makedirs(self.args.image_folder, exist_ok=True)
 
-            ds_name = str(config.data.dataset).lower()
-
+            # ---------------------------
+            # (A) Ground truth figure 
+            # ---------------------------
+            fig_gt, ax_gt = plt.subplots(1, 1, figsize=(5, 4))
             for i in range(min(10, y0_plot.shape[0])):
-                ax[0].plot(x_0[i], y0_plot[i], color="k", alpha=0.7)
-            ax[0].set_title(f"Ground truth, len:{config.data.hyp_len:.2f}")
+                ax_gt.plot(x_0[i], y0_plot[i], color="k", alpha=0.7)
+            ax_gt.set_title(f"Ground truth, len:{config.data.hyp_len:.2f}")
+            fig_gt.tight_layout()
 
+            gt_path = os.path.join(self.args.image_folder, "tsit5_ground_truth.pdf")
+            fig_gt.savefig(gt_path, format="pdf", bbox_inches="tight")
+            print(f"Saved GT figure to {gt_path}")
+            plt.close(fig_gt)
+
+            # ---------------------------
+            # (B) Sample figure 
+            # ---------------------------
+            fig_sm, ax_sm = plt.subplots(1, 1, figsize=(5, 4))
             for i in range(y_gen_plot.shape[0]):
-                ax[1].plot(free_input[i].cpu(), y_gen_plot[i], alpha=0.9)
-            ax[1].set_title(f"resolution-free, power(avg 30): {power_res}")
-
-            fig.suptitle(f"Tsit5-ODE (NFE={self.args.nfe})", fontsize=14)
-            plt.tight_layout()
-            plt.savefig("visualization_tsit5.png")
-            print("Saved plot fig to visualization_tsit5.png")
-            plt.clf()
-            plt.figure()
+                ax_sm.plot(free_input[i].cpu(), y_gen_plot[i], alpha=0.9)
+            ax_sm.set_title(f"resolution-free, power(avg 30): {power_res}")
+            fig_sm.tight_layout()
+            sm_path = os.path.join(self.args.image_folder, "tsit5_sample.pdf")
+            fig_sm.savefig(sm_path, format="pdf", bbox_inches="tight")
+            print(f"Saved sample figure to {sm_path}")
+            plt.close(fig_sm)
 
         if self.args.sample_type == "srk":
             with torch.no_grad():
